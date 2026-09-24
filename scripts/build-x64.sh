@@ -52,7 +52,7 @@ REQUIRED_NODES=(
   "node_modules/@parcel/watcher-darwin-x64/watcher.node"
   "node_modules/fs-native-extensions/prebuilds/darwin-x64/fs-native-extensions.node"
 )
-UNPACKED="$APP/Contents/Resources/app.asar.unpacked"
+UNPACKED="$(cd "$APP/Contents/Resources/app.asar.unpacked" && pwd)"
 for rel in "${REQUIRED_NODES[@]}"; do
   f="$UNPACKED/$rel"
   [ -f "$f" ] || { echo "FAIL: missing $rel"; exit 1; }
