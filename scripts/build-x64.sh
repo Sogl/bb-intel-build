@@ -75,6 +75,33 @@ export ELECTRON_RUN_AS_NODE=1
 echo "Native addon verification passed."
 echo "::endgroup::"
 
+echo "::group::Ad-hoc code sign"
+# electron-builder ships the bundle unsigned (identity: null). An ad-hoc
+# signature is not a Gatekeeper bypass — downloads still need `xattr -dr` —
+# but a validly signed bundle avoids syspolicyd provenance-tracking every exec
+# in the app's process tree (server, host-daemon, watcher, pty helpers).
+# Same entitlements as upstream (jit, unsigned-exec-mem, lib-validation off).
+codesign --deep --force --options runtime \
+  --entitlements build/entitlements.mac.plist \
+  --sign - "$APP"
+codesign --verify --deep --strict "$APP"
+codesign -dv "$APP" 2>&1 | grep -E "Signature=adhoc|TeamIdentifier"
+echo "::endgroup::"
+
+echo "::group::Repack signed artifacts"
+# The dmg/zip electron-builder produced contain the unsigned app; rebuild them
+# from the signed bundle so both artifacts carry the ad-hoc signature.
+VER="$(node -p "require('./package.json').version")"
+rm -f release/*-x64.zip release/*-x64.dmg release/*.blockmap
+ditto -c -k --sequesterRsrc --keepParent "$APP" "release/bb-${VER}-x64.zip"
+DMG_STAGE="$(mktemp -d /tmp/bb-dmg-XXXX)"
+cp -R "$APP" "$DMG_STAGE/"
+ln -s /Applications "$DMG_STAGE/Applications"
+hdiutil create -volname "bb ${VER}" -srcfolder "$DMG_STAGE" -ov -format UDZO \
+  "release/bb-${VER}-x64.dmg"
+rm -rf "$DMG_STAGE"
+echo "::endgroup::"
+
 echo "::group::Artifacts"
 ls -lh release/*.dmg release/*.zip
 ( cd release && shasum -a 256 *.dmg *.zip | tee SHA256SUMS.txt )

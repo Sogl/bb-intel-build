@@ -92,10 +92,15 @@ jobs:
           set -euo pipefail
           REL="x64-${{ needs.resolve-tag.outputs.tag }}"
           VER="${{ needs.resolve-tag.outputs.version }}"
-          gh release create "$REL" --repo "${{ github.repository }}" \
-            --title "bb desktop $VER (Intel x86_64, unofficial)" \
-            --notes "Unofficial Intel x86_64 build of get-bb/bb tag ${{ needs.resolve-tag.outputs.tag }}.
-          Built on macos-26-intel from source + bb-intel-local.patch. Unsigned — after installing run:
-            xattr -dr com.apple.quarantine /Applications/bb.app
-          Auto-update is disabled in this build (upstream feed is arm64-only)." \
-            *.dmg *.zip SHA256SUMS.txt
+          if gh release view "$REL" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            gh release upload "$REL" --repo "${{ github.repository }}" --clobber \
+              *.dmg *.zip SHA256SUMS.txt
+          else
+            gh release create "$REL" --repo "${{ github.repository }}" \
+              --title "bb desktop $VER (Intel x86_64, unofficial)" \
+              --notes "Unofficial Intel x86_64 build of get-bb/bb tag ${{ needs.resolve-tag.outputs.tag }}.
+            Built on macos-26-intel from source + bb-intel-local.patch. Ad-hoc signed — after installing run:
+              xattr -dr com.apple.quarantine /Applications/bb.app
+            Auto-update is disabled in this build (upstream feed is arm64-only)." \
+              *.dmg *.zip SHA256SUMS.txt
+          fi

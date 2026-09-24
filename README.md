@@ -17,22 +17,31 @@ arch-agnostic, so a small patch is enough.
 4. verifies the Electron executable and every darwin native addon
    (`better-sqlite3`, `node-pty`, `@parcel/watcher`, `fs-native-extensions`)
    is Mach-O x86_64, and loads better-sqlite3/node-pty under packaged Electron;
-5. publishes a `x64-<tag>` release here with the dmg/zip + SHA256SUMS.
+5. **ad-hoc signs** the bundle (`codesign -s -`, upstream entitlements +
+   hardened runtime) and repacks dmg/zip around the signed app;
+6. publishes a `x64-<tag>` release here with the dmg/zip + SHA256SUMS.
 
 Cron runs twice a day; a build happens only when a new `desktop-v*` tag appears
 and no `x64-<tag>` release exists yet.
 
 ## Install
 
-Download `bb-*-x64.dmg` (or the `.zip`) from Releases, install, then:
+Download `bb-*-x64.dmg` (or the `.zip`) from Releases, copy `bb.app` to
+/Applications (replace the old one if present), then clear quarantine once:
 
 ```sh
 xattr -dr com.apple.quarantine /Applications/bb.app
 ```
 
-Builds are unsigned (no Developer ID). Auto-update is disabled inside the
+Or without a terminal: launch once → macOS blocks it → System Settings →
+Privacy & Security → "bb was blocked" → **Open Anyway** → launch again.
+
+Builds are **ad-hoc signed** (`Signature=adhoc` — no Developer ID, so
+Gatekeeper still warns once). Ad-hoc signing avoids macOS provenance-tracking
+every exec in the app's process tree. Auto-update is disabled inside the
 build — the upstream feed only ships arm64, which cannot launch on Intel.
-Updating = downloading the next `x64-*` release.
+Updating = downloading the next `x64-*` release and replacing `bb.app`;
+data lives in `~/.bb` and survives replacement.
 
 ## Manual trigger
 
