@@ -1,0 +1,107 @@
+diff --git a/apps/desktop/package.json b/apps/desktop/package.json
+index efc83812..415d220d 100644
+--- a/apps/desktop/package.json
++++ b/apps/desktop/package.json
+@@ -13,12 +13,15 @@
+     "clean": "rimraf dist release",
+     "desktop:build": "pnpm run build && node scripts/run-electron-builder.mjs --mac --arm64 --publish always",
+     "desktop:build:linux": "pnpm run build && node scripts/run-electron-builder.mjs --linux --x64 --publish never",
++    "desktop:build:x64": "BB_DESKTOP_DISABLE_AUTO_UPDATE=1 pnpm run build && BB_DESKTOP_MAC_ARCH=x64 node scripts/run-electron-builder.mjs --mac --x64 --publish never",
+     "desktop:version-feed": "tsx scripts/generate-version-feed.mts",
+     "dev": "pnpm run prepare-runtime && pnpm run build && node --conditions=source --import tsx scripts/run-electron-dev.mjs",
+     "dist": "pnpm run prepare-runtime && pnpm run desktop:build",
+     "dist:linux": "pnpm run prepare-runtime && pnpm run desktop:build:linux",
++    "dist:x64": "pnpm run prepare-runtime && pnpm run desktop:build:x64",
+     "package": "pnpm run prepare-runtime && pnpm run build && node scripts/run-electron-builder.mjs --mac --dir --arm64",
+     "package:linux": "pnpm run prepare-runtime && pnpm run build && node scripts/run-electron-builder.mjs --linux --dir --x64",
++    "package:x64": "pnpm run prepare-runtime && BB_DESKTOP_DISABLE_AUTO_UPDATE=1 pnpm run build && BB_DESKTOP_MAC_ARCH=x64 node scripts/run-electron-builder.mjs --mac --dir --x64",
+     "prepare-runtime": "pnpm exec turbo run build --filter=bb-app --output-logs=new-only",
+     "smoke:appimage-lifecycle": "node scripts/smoke-linux-appimage-lifecycle.mjs",
+     "smoke:packaged": "node scripts/smoke-packaged-app.mjs",
+diff --git a/apps/desktop/scripts/build.mjs b/apps/desktop/scripts/build.mjs
+index bb918a22..117ff3e9 100644
+--- a/apps/desktop/scripts/build.mjs
++++ b/apps/desktop/scripts/build.mjs
+@@ -78,6 +78,11 @@ const commonOptions = {
+   define: {
+     "process.env.BB_DESKTOP_BUILD_DATE": JSON.stringify(desktopBuildDate),
+     "process.env.BB_DESKTOP_COMMIT": JSON.stringify(desktopCommit),
++    // Baked at build time: local x64 builds must not self-update — the
++    // upstream feed only ships arm64 artifacts, which cannot launch on Intel.
++    "process.env.BB_DESKTOP_DISABLE_AUTO_UPDATE": JSON.stringify(
++      process.env.BB_DESKTOP_DISABLE_AUTO_UPDATE ?? "",
++    ),
+     "process.env.BB_DESKTOP_PLUGIN_SDK_VERSION":
+       JSON.stringify(pluginSdkVersion),
+     "process.env.BB_DESKTOP_RELEASE_CHANNEL": JSON.stringify(
+diff --git a/apps/desktop/scripts/run-electron-builder.mjs b/apps/desktop/scripts/run-electron-builder.mjs
+index 9e14bd40..48928fff 100644
+--- a/apps/desktop/scripts/run-electron-builder.mjs
++++ b/apps/desktop/scripts/run-electron-builder.mjs
+@@ -158,10 +158,32 @@ function createSigningPlan(env) {
+   };
+ }
+ 
++const MAC_ARCH_ENV_NAME = "BB_DESKTOP_MAC_ARCH";
++const SUPPORTED_MAC_ARCHES = new Set(["arm64", "x64", "universal"]);
++
++// Upstream pins mac targets to arm64 (Intel CI builds tripled release time).
++// BB_DESKTOP_MAC_ARCH lets a local build override the generated config only —
++// the checked-in config and its arm64-only guard test stay untouched.
++function resolveMacArchOverride(env) {
++  const rawArch = env[MAC_ARCH_ENV_NAME]?.trim();
++  if (rawArch === undefined || rawArch.length === 0) {
++    return undefined;
++  }
++  if (!SUPPORTED_MAC_ARCHES.has(rawArch)) {
++    throw new Error(
++      `${MAC_ARCH_ENV_NAME} must be one of ${[...SUPPORTED_MAC_ARCHES].join(
++        ", ",
++      )}, got ${rawArch}.`,
++    );
++  }
++  return rawArch;
++}
++
+ function resolveElectronBuilderConfig(baseConfig, env) {
+   const signingPlan = createSigningPlan(env);
+   const releaseChannel = resolveDesktopReleaseChannel(env);
+   const releaseConfig = createDesktopReleaseConfig(releaseChannel);
++  const macArchOverride = resolveMacArchOverride(env);
+   const config = cloneJson(baseConfig);
+   const mac = {
+     ...config.mac,
+@@ -169,6 +191,13 @@ function resolveElectronBuilderConfig(baseConfig, env) {
+     notarize: signingPlan.notarizationEnabled,
+   };
+ 
++  if (macArchOverride !== undefined && Array.isArray(mac.target)) {
++    mac.target = mac.target.map((target) => ({
++      ...target,
++      arch: [macArchOverride],
++    }));
++  }
++
+   if (signingPlan.mode === "disabled") {
+     mac.identity = null;
+   } else if (signingPlan.identityName) {
+diff --git a/apps/desktop/src/main.ts b/apps/desktop/src/main.ts
+index 38dd10b0..b486aa69 100644
+--- a/apps/desktop/src/main.ts
++++ b/apps/desktop/src/main.ts
+@@ -2532,6 +2532,7 @@ async function runDesktopApp(): Promise<void> {
+     currentVersion: desktopVersion,
+     enabled:
+       desktopUpdateSupport.versionCheck &&
++      process.env.BB_DESKTOP_DISABLE_AUTO_UPDATE !== "1" &&
+       (app.isPackaged || process.env.BB_DESKTOP_VERSION_CHECK === "1"),
+     feedUrl: desktopUpdateFeedUrl,
+     logger: desktopLogger,
+@@ -2541,6 +2542,7 @@ async function runDesktopApp(): Promise<void> {
+     currentVersion: desktopVersion,
+     enabled:
+       desktopUpdateSupport.autoUpdate &&
++      process.env.BB_DESKTOP_DISABLE_AUTO_UPDATE !== "1" &&
+       shouldEnableDesktopAutoUpdate({
+         env: process.env,
+         isPackaged: app.isPackaged,

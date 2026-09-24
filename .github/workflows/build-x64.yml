@@ -1,0 +1,101 @@
+name: Build bb desktop for Intel Mac (x86_64)
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Upstream tag to build (e.g. desktop-v0.43.4). Empty = latest stable desktop-v* release.'
+        required: false
+        type: string
+      force:
+        description: 'Rebuild even if an x64 release for this tag already exists'
+        required: false
+        type: boolean
+        default: false
+  schedule:
+    # Check upstream twice a day; builds only when a new desktop-v* tag appears.
+    - cron: '17 */12 * * *'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: intel-build
+  cancel-in-progress: false
+
+jobs:
+  resolve-tag:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+      version: ${{ steps.resolve.outputs.version }}
+      skip: ${{ steps.resolve.outputs.skip }}
+    steps:
+      - name: Resolve latest stable desktop tag
+        id: resolve
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          INPUT_TAG: ${{ inputs.tag }}
+          INPUT_FORCE: ${{ inputs.force }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if [ -n "$INPUT_TAG" ]; then
+            TAG="$INPUT_TAG"
+          else
+            # Latest non-draft non-prerelease desktop-v* release, newest first.
+            TAG=$(gh api "repos/get-bb/bb/releases?per_page=30" \
+              --jq '[.[] | select(.draft | not) | select(.prerelease | not) | .tag_name | select(startswith("desktop-v"))] | .[0]')
+          fi
+          [ -n "$TAG" ] && [ "$TAG" != "null" ] || { echo "no desktop-v* release found"; exit 1; }
+          VERSION="${TAG#desktop-v}"
+          REL="x64-$TAG"
+          SKIP=false
+          if [ "$INPUT_FORCE" != "true" ] && gh release view "$REL" --repo "$REPO" >/dev/null 2>&1; then
+            echo "release $REL already exists — skipping"
+            SKIP=true
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "skip=$SKIP" >> "$GITHUB_OUTPUT"
+          echo "Building $TAG (release $REL), skip=$SKIP"
+
+  build:
+    needs: resolve-tag
+    if: needs.resolve-tag.outputs.skip != 'true'
+    runs-on: macos-26-intel
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.19.0'
+
+      - name: Build x64 artifact
+        env:
+          BB_INTEL_WORKDIR: ${{ github.workspace }}/.bb-src
+        run: |
+          chmod +x scripts/build-x64.sh
+          scripts/build-x64.sh "${{ needs.resolve-tag.outputs.tag }}"
+
+      - name: Packaged smoke test (non-gating)
+        continue-on-error: true
+        working-directory: ${{ github.workspace }}/.bb-src/bb/apps/desktop
+        run: pnpm run smoke:packaged
+
+      - name: Publish x64 release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        working-directory: ${{ github.workspace }}/.bb-src/bb/apps/desktop/release
+        run: |
+          set -euo pipefail
+          REL="x64-${{ needs.resolve-tag.outputs.tag }}"
+          VER="${{ needs.resolve-tag.outputs.version }}"
+          gh release create "$REL" --repo "${{ github.repository }}" \
+            --title "bb desktop $VER (Intel x86_64, unofficial)" \
+            --notes "Unofficial Intel x86_64 build of get-bb/bb tag ${{ needs.resolve-tag.outputs.tag }}.
+          Built on macos-26-intel from source + bb-intel-local.patch. Unsigned — after installing run:
+            xattr -dr com.apple.quarantine /Applications/bb.app
+          Auto-update is disabled in this build (upstream feed is arm64-only)." \
+            *.dmg *.zip SHA256SUMS.txt
