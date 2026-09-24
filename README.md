@@ -1,7 +1,9 @@
 # bb-intel-build
 
 Unofficial Intel (x86_64) builds of [get-bb/bb](https://github.com/get-bb/bb)
-desktop. Upstream ships arm64-only on purpose (PR #1627); the codebase is
+desktop. Upstream ships arm64-only on purpose
+([PR #1627](https://github.com/get-bb/bb/pull/1627), reverting
+[PR #1137](https://github.com/get-bb/bb/pull/1137)); the codebase is
 arch-agnostic, so a small patch is enough.
 
 ## How it works
